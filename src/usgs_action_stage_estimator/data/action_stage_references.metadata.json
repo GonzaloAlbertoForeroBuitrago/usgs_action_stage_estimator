@@ -1,0 +1,7 @@
+{
+  "source_file": "/Users/gonzalo/Documents/usgs_mrms_research/outputs/national_scientific_validation_v020/recent_offset_harmonization/paired_harmonization_effect/paired_station_comparison.csv",
+  "source_sha256": "641e244ce977dcffe92ec8094bb64a61a4f5f318d4b289a92c7a1b15106a44bd",
+  "reference_records": 3866,
+  "eligible_references": 3717,
+  "description": "Historical NOAA/USGS Action Stage reference crosswalk and datum compatibility audit."
+}

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usgs-action-stage-estimator"
+version = "0.1.0"
+description = "Research tools for USGS water-stage analysis and Action Stage estimation"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+authors = [
+    { name = "Gonzalo Forero Buitrago" }
+]
+
+dependencies = [
+    "numpy>=2.0,<3",
+    "pandas>=2.3,<3",
+    "pyarrow>=18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "build",
+    "twine",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+usgs_action_stage_estimator = [
+    "data/*.parquet",
+    "data/*.json",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
