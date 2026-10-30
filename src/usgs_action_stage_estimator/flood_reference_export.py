@@ -6,6 +6,8 @@ No USGS observations or experimental estimates are duplicated.
 
 from __future__ import annotations
 
+from .identifiers import validate_site_id
+
 import json
 import os
 import tempfile
@@ -66,15 +68,7 @@ def export_flood_references(
     if result.get("reference_source") != "NOAA_NWPS_API":
         raise ValueError("A successful NOAA API response is required.")
 
-    site_id = str(result["site_id"]).strip()
-
-    if not site_id.isascii() or not site_id.isdigit():
-        raise ValueError("Invalid USGS station identifier.")
-
-    if len(site_id) > 8:
-        raise ValueError("USGS station identifier exceeds eight digits.")
-
-    site_id = site_id.zfill(8)
+    site_id = validate_site_id(result["site_id"])
 
     state = str(state).strip().upper()
 

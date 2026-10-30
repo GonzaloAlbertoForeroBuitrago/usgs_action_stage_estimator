@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .identifiers import validate_site_id
+
 import math
 from pathlib import Path
 from importlib.resources import files
@@ -33,15 +35,7 @@ def get_action_stage(
     The API value is not an experimental threshold estimate.
     """
 
-    site_id = str(site_id).strip()
-
-    if not site_id.isascii() or not site_id.isdigit():
-        raise ValueError("site_id must contain ASCII digits.")
-
-    if not 1 <= len(site_id) <= 8:
-        raise ValueError("site_id must contain 1 to 8 digits.")
-
-    site_id = site_id.zfill(8)
+    site_id = validate_site_id(site_id)
 
     if reference_table is None:
         resource = files(
@@ -74,7 +68,7 @@ def get_action_stage(
             f"Missing reference columns: {sorted(missing)}"
         )
 
-    ids = references["site_id"].astype("string").str.zfill(8)
+    ids = references["site_id"].astype("string")
 
     matching = references.loc[ids == site_id]
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .identifiers import validate_site_id
+
 from pathlib import Path
 
 import numpy as np
@@ -72,7 +74,10 @@ def clean_action_stage_references(
 
     data = data[REFERENCE_COLUMNS].copy()
 
-    data["site_id"] = data["site_id"].str.strip().str.zfill(8)
+    data["site_id"] = data["site_id"].map(
+        validate_site_id,
+        na_action="ignore",
+    )
 
     if data["site_id"].isna().any():
         raise ValueError("Missing station identifiers.")

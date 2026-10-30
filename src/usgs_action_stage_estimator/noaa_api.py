@@ -8,6 +8,8 @@ No hydrological threshold estimation is performed here.
 
 from __future__ import annotations
 
+from .identifiers import validate_site_id
+
 import json
 import math
 from datetime import datetime, timezone
@@ -111,7 +113,7 @@ def normalize_noaa_gauge(
     usgs_id = str(payload.get("usgsId") or "").strip()
 
     if expected_usgs_id is not None:
-        expected = str(expected_usgs_id).strip().zfill(8)
+        expected = validate_site_id(expected_usgs_id)
 
         if usgs_id != expected:
             raise NOAAAPIError(

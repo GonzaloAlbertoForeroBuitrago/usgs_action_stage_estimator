@@ -6,6 +6,8 @@ Action Stage reference metadata. It does not estimate thresholds.
 
 from __future__ import annotations
 
+from .identifiers import validate_site_id
+
 import json
 from pathlib import Path
 
@@ -42,7 +44,7 @@ def build_station_inventory(
         counts = manifest.get("counts", {})
         parameters = manifest.get("parameters", {})
 
-        site_id = station_dir.name.zfill(8)
+        site_id = validate_site_id(station_dir.name)
 
         records.append({
             "site_id": site_id,
