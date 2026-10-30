@@ -220,3 +220,379 @@ def test_short_segments_preserved(tmp_path):
 
     assert len(filtered) == len(observations)
     assert (~filtered["filter_applied"]).sum() >= 2
+
+
+def test_national_queue_handles_empty_and_missing(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_stage_inventory,
+    )
+
+    inventory = pd.DataFrame([
+        {
+            "state": "TEXAS",
+            "site_id": "08165500",
+            "source_path": str(tmp_path / "missing.parquet"),
+            "source_status": "ready",
+        },
+        {
+            "state": "IOWA",
+            "site_id": "05400000",
+            "source_path": str(tmp_path / "empty.parquet"),
+            "source_status": "empty_input",
+        },
+    ])
+
+    result = process_stage_inventory(
+        inventory,
+        tmp_path / "outputs",
+    )
+
+    assert len(result) == 2
+
+    statuses = dict(zip(result["site_id"], result["status"]))
+
+    assert statuses["08165500"] == "missing_input"
+    assert statuses["05400000"] == "empty_input"
+
+
+def test_national_queue_rejects_invalid_limit(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_stage_inventory,
+    )
+
+    inventory = pd.DataFrame(columns=[
+        "state",
+        "site_id",
+        "source_path",
+        "source_status",
+    ])
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        process_stage_inventory(
+            inventory,
+            tmp_path,
+            max_stations=0,
+        )
+
+
+def test_processing_summary_updates_without_duplicates(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        save_processing_summary,
+    )
+
+    first = pd.DataFrame([{
+        "state": "TEXAS",
+        "site_id": "08165500",
+        "status": "completed",
+        "peak_candidates": 100,
+    }])
+
+    second = pd.DataFrame([{
+        "state": "TEXAS",
+        "site_id": "08165500",
+        "status": "already_completed",
+        "peak_candidates": 100,
+    }])
+
+    save_processing_summary(first, tmp_path)
+    destination = save_processing_summary(second, tmp_path)
+
+    saved = pd.read_parquet(destination)
+
+    assert len(saved) == 1
+    assert saved.iloc[0]["site_id"] == "08165500"
+    assert saved.iloc[0]["status"] == "already_completed"
+    assert saved.iloc[0]["peak_candidates"] == 100
+
+
+def test_processing_summary_updates_without_duplicates(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        save_processing_summary,
+    )
+
+    first = pd.DataFrame([{
+        "state": "TEXAS",
+        "site_id": "08165500",
+        "status": "completed",
+        "peak_candidates": 100,
+    }])
+
+    second = pd.DataFrame([{
+        "state": "TEXAS",
+        "site_id": "08165500",
+        "status": "already_completed",
+        "peak_candidates": 100,
+    }])
+
+    save_processing_summary(first, tmp_path)
+    destination = save_processing_summary(second, tmp_path)
+
+    saved = pd.read_parquet(destination)
+
+    assert len(saved) == 1
+    assert saved.iloc[0]["site_id"] == "08165500"
+    assert saved.iloc[0]["status"] == "already_completed"
+    assert saved.iloc[0]["peak_candidates"] == 100
+
+
+def test_national_runner_persists_progress(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_stage_inventory,
+    )
+
+    inventory = pd.DataFrame([
+        {
+            "state": "IOWA",
+            "site_id": "05400000",
+            "source_path": str(tmp_path / "missing.parquet"),
+            "source_status": "ready",
+        },
+        {
+            "state": "TEXAS",
+            "site_id": "08165500",
+            "source_path": str(tmp_path / "empty.parquet"),
+            "source_status": "empty_input",
+        },
+    ])
+
+    output_root = tmp_path / "outputs"
+
+    result = process_stage_inventory(
+        inventory,
+        output_root,
+    )
+
+    saved = pd.read_parquet(
+        output_root / "national_processing_summary.parquet"
+    )
+
+    assert len(result) == 2
+    assert len(saved) == 2
+    assert saved["site_id"].is_unique
+
+    statuses = dict(zip(saved["site_id"], saved["status"]))
+
+    assert statuses["05400000"] == "missing_input"
+    assert statuses["08165500"] == "empty_input"
+
+
+def test_national_runner_resumes_without_duplicates(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_stage_inventory,
+    )
+
+    source = tmp_path / "source.parquet"
+
+    observations = pd.DataFrame({
+        "datetime": pd.date_range(
+            "2025-01-01",
+            periods=7,
+            freq="5min",
+            tz="UTC",
+        ),
+        "Stage_ft": [8, 8, 10, 15, 10, 8, 8],
+    })
+
+    observations.to_parquet(source, index=False)
+
+    inventory = pd.DataFrame([
+        {
+            "state": "COLORADO",
+            "site_id": "384037104472001",
+            "source_path": str(source),
+            "source_status": "ready",
+        },
+        {
+            "state": "TEXAS",
+            "site_id": "08165500",
+            "source_path": str(tmp_path / "missing.parquet"),
+            "source_status": "ready",
+        },
+    ])
+
+    output_root = tmp_path / "outputs"
+
+    first = process_stage_inventory(
+        inventory,
+        output_root,
+        max_stations=1,
+    )
+
+    assert first.iloc[0]["status"] == "completed"
+
+    second = process_stage_inventory(
+        inventory,
+        output_root,
+    )
+
+    statuses = dict(zip(second["site_id"], second["status"]))
+
+    assert statuses["384037104472001"] == "already_completed"
+    assert statuses["08165500"] == "missing_input"
+
+    summary = pd.read_parquet(
+        output_root / "national_processing_summary.parquet"
+    )
+
+    assert len(summary) == 2
+    assert summary["site_id"].is_unique
+
+
+def test_national_processing_lock_rejects_second_runner(tmp_path):
+    import pytest
+
+    from usgs_action_stage_estimator.national_stage_processing import (
+        national_processing_lock,
+    )
+
+    with national_processing_lock(tmp_path):
+        with pytest.raises(
+            RuntimeError,
+            match="Another national processing run is active",
+        ):
+            with national_processing_lock(tmp_path):
+                pass
+
+
+def test_completed_and_resumed_summary_fields(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_one_station,
+    )
+
+    source = tmp_path / "source.parquet"
+
+    observations = pd.DataFrame({
+        "datetime": pd.date_range(
+            "2025-01-01",
+            periods=7,
+            freq="5min",
+            tz="UTC",
+        ),
+        "Stage_ft": [8, 8, 10, 15, 10, 8, 8],
+    })
+
+    observations.to_parquet(source, index=False)
+
+    kwargs = {
+        "state": "TEXAS",
+        "site_id": "0136230002",
+    }
+
+    first = process_one_station(
+        source, tmp_path / "outputs", **kwargs
+    )
+
+    second = process_one_station(
+        source, tmp_path / "outputs", **kwargs
+    )
+
+    fields = {
+        "source_rows",
+        "segments",
+        "detected_events",
+        "filtered_observations",
+        "unfiltered_observations",
+        "peak_candidates",
+        "selected_peaks",
+        "processing_version",
+    }
+
+    assert first["status"] == "completed"
+    assert second["status"] == "already_completed"
+
+    for field in fields:
+        assert first[field] == second[field]
+
+
+def test_national_processing_lock_rejects_second_runner(tmp_path):
+    import pytest
+
+    from usgs_action_stage_estimator.national_stage_processing import (
+        national_processing_lock,
+    )
+
+    with national_processing_lock(tmp_path):
+        with pytest.raises(
+            RuntimeError,
+            match="Another national processing run is active",
+        ):
+            with national_processing_lock(tmp_path):
+                pass
+
+
+def test_completed_and_resumed_summary_fields(tmp_path):
+    from usgs_action_stage_estimator.national_stage_processing import (
+        process_one_station,
+    )
+
+    source = tmp_path / "source.parquet"
+
+    observations = pd.DataFrame({
+        "datetime": pd.date_range(
+            "2025-01-01",
+            periods=7,
+            freq="5min",
+            tz="UTC",
+        ),
+        "Stage_ft": [8, 8, 10, 15, 10, 8, 8],
+    })
+
+    observations.to_parquet(source, index=False)
+
+    kwargs = {
+        "state": "TEXAS",
+        "site_id": "0136230002",
+    }
+
+    first = process_one_station(
+        source, tmp_path / "outputs", **kwargs
+    )
+
+    second = process_one_station(
+        source, tmp_path / "outputs", **kwargs
+    )
+
+    fields = {
+        "source_rows",
+        "segments",
+        "detected_events",
+        "filtered_observations",
+        "unfiltered_observations",
+        "peak_candidates",
+        "selected_peaks",
+        "processing_version",
+    }
+
+    assert first["status"] == "completed"
+    assert second["status"] == "already_completed"
+
+    for field in fields:
+        assert first[field] == second[field]
+
+
+def test_runner_respects_national_lock(tmp_path):
+    import pytest
+
+    from usgs_action_stage_estimator.national_stage_processing import (
+        national_processing_lock,
+        process_stage_inventory,
+    )
+
+    inventory = pd.DataFrame([{
+        "state": "TEXAS",
+        "site_id": "08165500",
+        "source_path": str(tmp_path / "missing.parquet"),
+        "source_status": "ready",
+    }])
+
+    with national_processing_lock(tmp_path / "outputs"):
+        with pytest.raises(
+            RuntimeError,
+            match="Another national processing run is active",
+        ):
+            process_stage_inventory(
+                inventory,
+                tmp_path / "outputs",
+            )

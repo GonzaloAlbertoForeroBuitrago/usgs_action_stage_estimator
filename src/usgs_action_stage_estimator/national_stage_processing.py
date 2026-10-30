@@ -273,15 +273,27 @@ def process_one_station(
                 "error": str(exc),
             }
 
+        counts = manifest["counts"]
+
         return {
             "state": state,
             "site_id": site_id,
             "status": "already_completed",
             "source_rows": source_rows,
-            "peak_candidates": manifest["counts"]["peak_candidates"],
+            "segments": counts["segments"],
+            "detected_events": counts["detected_events"],
+            "filtered_observations": counts["filtered_observations"],
+            "unfiltered_observations": (
+                source_rows - counts["filtered_observations"]
+            ),
+            "peak_candidates": counts["peak_candidates"],
+            "selected_peaks": counts["selected_peaks"],
+            "processing_version": "0.3.1",
         }
 
     import tempfile
+
+    fingerprint_before = fingerprint_source(source_path)
 
     observations = pd.read_parquet(source_path)
 
@@ -309,7 +321,14 @@ def process_one_station(
             source_rows=source_rows,
         )
 
-        fingerprint = fingerprint_source(source_path)
+        fingerprint_after = fingerprint_source(source_path)
+
+        if fingerprint_before != fingerprint_after:
+            raise ValueError(
+                "Source file changed during processing."
+            )
+
+        fingerprint = fingerprint_before
 
         provenance = {
             "schema_version": 1,
@@ -341,7 +360,198 @@ def process_one_station(
         "source_rows": source_rows,
         "segments": manifest["counts"]["segments"],
         "detected_events": manifest["counts"]["detected_events"],
+        "filtered_observations": manifest["counts"]["filtered_observations"],
+        "unfiltered_observations": (
+            source_rows - manifest["counts"]["filtered_observations"]
+        ),
         "peak_candidates": manifest["counts"]["peak_candidates"],
         "selected_peaks": manifest["counts"]["selected_peaks"],
+        "processing_version": "0.3.1",
         "elapsed_seconds": round(elapsed, 3),
     }
+
+
+def _process_stage_inventory_unlocked(
+    inventory: pd.DataFrame,
+    output_root: str | Path,
+    *,
+    max_stations: int | None = None,
+) -> pd.DataFrame:
+    """Process a deterministic station queue with failure isolation."""
+
+    import time
+
+    required = {
+        "state",
+        "site_id",
+        "source_path",
+        "source_status",
+    }
+
+    missing = required - set(inventory.columns)
+
+    if missing:
+        raise ValueError(
+            f"Missing inventory columns: {sorted(missing)}"
+        )
+
+    if max_stations is not None and max_stations < 1:
+        raise ValueError("max_stations must be positive.")
+
+    queue = (
+        inventory.sort_values(["state", "site_id"])
+        .reset_index(drop=True)
+    )
+
+    if max_stations is not None:
+        queue = queue.head(max_stations)
+
+    records = []
+
+    for row in queue.itertuples(index=False):
+        state = row.state
+        site_id = validate_site_id(row.site_id)
+
+        start = time.perf_counter()
+
+        if row.source_status != "ready":
+            result = {
+                "state": state,
+                "site_id": site_id,
+                "status": row.source_status,
+            }
+        else:
+            try:
+                result = process_one_station(
+                    row.source_path,
+                    output_root,
+                    state=state,
+                    site_id=site_id,
+                )
+            except Exception as exc:
+                result = {
+                    "state": state,
+                    "site_id": site_id,
+                    "status": "failed",
+                    "error": (
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                }
+
+        result["elapsed_seconds_total"] = round(
+            time.perf_counter() - start,
+            3,
+        )
+
+        records.append(result)
+
+        save_processing_summary(
+            pd.DataFrame([result]),
+            output_root,
+        )
+
+        print(
+            f"{state}/{site_id}: {result['status']}",
+            flush=True,
+        )
+
+    return pd.DataFrame(records)
+
+
+def save_processing_summary(
+    records: pd.DataFrame,
+    output_root: str | Path,
+) -> Path:
+    """Atomically update the national processing summary."""
+
+    import os
+    import tempfile
+
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    destination = output_root / "national_processing_summary.parquet"
+
+    if destination.exists():
+        previous = pd.read_parquet(destination)
+        combined = pd.concat(
+            [previous, records],
+            ignore_index=True,
+        )
+    else:
+        combined = records.copy()
+
+    combined = (
+        combined.drop_duplicates(
+            subset=["state", "site_id"],
+            keep="last",
+        )
+        .sort_values(["state", "site_id"])
+        .reset_index(drop=True)
+    )
+
+    with tempfile.NamedTemporaryFile(
+        dir=output_root,
+        suffix=".parquet",
+        delete=False,
+    ) as temporary:
+        temporary_path = Path(temporary.name)
+
+    try:
+        combined.to_parquet(temporary_path, index=False)
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+    return destination
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def national_processing_lock(output_root: str | Path):
+    """Prevent concurrent national runners on macOS/Unix."""
+
+    import fcntl
+
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    lock_path = output_root / ".national_processing.lock"
+
+    with lock_path.open("a+") as lock_file:
+        try:
+            fcntl.flock(
+                lock_file.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "Another national processing run is active."
+            ) from exc
+
+        try:
+            yield
+        finally:
+            fcntl.flock(
+                lock_file.fileno(),
+                fcntl.LOCK_UN,
+            )
+
+
+
+def process_stage_inventory(
+    inventory: pd.DataFrame,
+    output_root: str | Path,
+    *,
+    max_stations: int | None = None,
+) -> pd.DataFrame:
+    """Process stations under an exclusive national execution lock."""
+
+    with national_processing_lock(output_root):
+        return _process_stage_inventory_unlocked(
+            inventory,
+            output_root,
+            max_stations=max_stations,
+        )
