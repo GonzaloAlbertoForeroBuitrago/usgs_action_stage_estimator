@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Research tools for USGS water-stage analysis and Action Stage estimation"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+readme = "README.md"
 
 authors = [
     { name = "Gonzalo Forero Buitrago" }
