@@ -71,5 +71,5 @@ The initial E03 implementation reproduced the previously established first- and 
 
 
 
-**Author:** Gonzalo Forero Buitrago  
+**Author:** Gonzalo Forero Buitrago
 **License declared in project metadata:** Apache-2.0
