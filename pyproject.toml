@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usgs-action-stage-estimator"
-version = "0.1.0"
-description = "Research tools for USGS water-stage analysis and Action Stage estimation"
+version = "0.2.0"
+description = "Research tools for reference-free USGS recurrent-stage estimation and NOAA Action Stage evaluation"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 readme = "README.md"

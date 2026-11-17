@@ -1,13 +1,17 @@
-"""Validate and standardize historical Action Stage references."""
+"""Validate Action Stage references and diagnose stage-reference scale.
+
+Reference handling in this module is evaluation/QC only. It must not alter the
+reference-free recurrent-stage estimator.
+"""
 
 from __future__ import annotations
-
-from .identifiers import validate_site_id
 
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from .identifiers import validate_site_id
 
 
 REFERENCE_COLUMNS = [
@@ -123,3 +127,134 @@ def clean_action_stage_references(
     )
 
     return data.sort_values("site_id").reset_index(drop=True)
+
+
+def assess_stage_reference_scale(
+    stage_ft,
+    action_stage_ft: float,
+    *,
+    margin_ft: float = 10.0,
+) -> dict:
+    """Diagnose whether Action Stage is on a plausible observed stage scale.
+
+    This is an evaluation/interoperability diagnostic, not an estimator input
+    and not proof that two vertical datums are identical.
+
+    Parameters
+    ----------
+    stage_ft
+        Raw observed USGS/P00 stage values in feet. Any array-like object
+        accepted by :class:`pandas.Series` may be supplied.
+    action_stage_ft
+        Official/reference Action Stage in feet.
+    margin_ft
+        Symmetric margin added to the observed minimum/maximum for the
+        diagnostic check. The default 10 ft reproduces the post-validation
+        reference-scale audit.
+
+    Returns
+    -------
+    dict
+        Observed-stage distribution statistics and a non-destructive diagnostic
+        status. The result must not be used to change a recurrent-stage estimate.
+
+    Notes
+    -----
+    In the frozen prospective validation, every one of the 39 evaluable
+    stations with absolute V22 signed error greater than 100 ft also had Action
+    Stage outside the raw observed Stage_ft minimum/maximum expanded by +/-10 ft.
+    That finding motivated this QC function. Those stations remained in the
+    primary validation and this function does not define an exclusion rule.
+    """
+
+    try:
+        action = float(action_stage_ft)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Action Stage must be finite.") from exc
+
+    if not np.isfinite(action):
+        raise ValueError("Action Stage must be finite.")
+
+    try:
+        margin = float(margin_ft)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("margin_ft must be finite and nonnegative.") from exc
+
+    if not np.isfinite(margin) or margin < 0:
+        raise ValueError("margin_ft must be finite and nonnegative.")
+
+    values = pd.to_numeric(
+        pd.Series(stage_ft, dtype="object"),
+        errors="coerce",
+    )
+
+    values = values.loc[
+        np.isfinite(values.to_numpy(dtype=float))
+    ].astype(float)
+
+    base = {
+        "action_stage_ft": action,
+        "margin_ft": margin,
+        "stage_rows": int(len(values)),
+        "stage_min_ft": np.nan,
+        "stage_q01_ft": np.nan,
+        "stage_q05_ft": np.nan,
+        "stage_median_ft": np.nan,
+        "stage_q95_ft": np.nan,
+        "stage_q99_ft": np.nan,
+        "stage_max_ft": np.nan,
+        "stage_range_ft": np.nan,
+        "action_minus_stage_median_ft": np.nan,
+        "action_within_observed_minmax": False,
+        "action_within_observed_minmax_plus_margin": False,
+        "diagnostic_status": "stage_series_unavailable",
+    }
+
+    if values.empty:
+        return base
+
+    quantiles = values.quantile(
+        [0.01, 0.05, 0.50, 0.95, 0.99]
+    )
+
+    stage_min = float(values.min())
+    stage_max = float(values.max())
+    stage_median = float(quantiles.loc[0.50])
+
+    inside = bool(
+        stage_min <= action <= stage_max
+    )
+
+    inside_margin = bool(
+        stage_min - margin
+        <= action
+        <= stage_max + margin
+    )
+
+    if inside:
+        status = "inside_observed_stage_range"
+    elif inside_margin:
+        status = "within_observed_stage_range_margin"
+    else:
+        status = "reference_scale_review_required"
+
+    base.update({
+        "stage_min_ft": stage_min,
+        "stage_q01_ft": float(quantiles.loc[0.01]),
+        "stage_q05_ft": float(quantiles.loc[0.05]),
+        "stage_median_ft": stage_median,
+        "stage_q95_ft": float(quantiles.loc[0.95]),
+        "stage_q99_ft": float(quantiles.loc[0.99]),
+        "stage_max_ft": stage_max,
+        "stage_range_ft": stage_max - stage_min,
+        "action_minus_stage_median_ft": (
+            action - stage_median
+        ),
+        "action_within_observed_minmax": inside,
+        "action_within_observed_minmax_plus_margin": (
+            inside_margin
+        ),
+        "diagnostic_status": status,
+    })
+
+    return base
